@@ -1,0 +1,221 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Harsh V Singh"
+date: "29 March 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+suppressMessages(suppressWarnings(library(caret)))
+suppressMessages(suppressWarnings(library(plyr)))
+suppressMessages(suppressWarnings(library(dplyr)))
+suppressMessages(suppressWarnings(library(gbm)))
+suppressMessages(suppressWarnings(library(ggplot2)))
+suppressMessages(suppressWarnings(library(gridExtra)))
+suppressMessages(suppressWarnings(library(knitr)))
+suppressMessages(suppressWarnings(library(kableExtra)))
+suppressMessages(suppressWarnings(library(MASS)))
+suppressMessages(suppressWarnings(library(randomForest)))
+suppressMessages(suppressWarnings(library(reshape2)))
+suppressMessages(suppressWarnings(library(tidyr)))
+
+set.seed(98981)
+
+```
+
+### Summary  
+  
+The goal of this project is to use exercise data collected from accelerometers on the belt, forearm, arm, and dumbell of 6 participants in order to quantify and predict *how well* people are doing certain exercises. The dataset has been collected by Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. as part of their paper titled [*Qualitative Activity Recognition of Weight Lifting Exercises*](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har). We will start by exploring the training data  and then use machine learning techniques to predict the outcome in a separate test set.  
+  
+***  
+  
+### Load Weight Lifting Exercise Data  
+  
+We will load the weight lifting exercise data from the provided online source.  
+  
+```{r load_data, cache = TRUE, cache.vars = c('trainData', 'testData')}
+
+trainData <- as_tibble(read.csv(url('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv')))
+testData <- as_tibble(read.csv(url('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv')))
+
+```  
+  
+***  
+  
+### Exploratory Data Analysis  
+  
+We will use the **trainData** set to conduct exploratory data analysis before we go on to building a machine learning model for making predictions. *The details of the analysis can be found in the appendix.*  
+  
+```{r data_exploration}
+
+outcome <- 'classe'
+
+# Remove mostly empty or NA columns from the data set
+
+emptyOrNA <- trainData %>% 
+    dplyr::summarise_all(funs(sum(. == '' | is.na(.)) / n())) %>% 
+    tidyr::gather() %>% 
+    dplyr::filter(value > 0.5) 
+
+trainData <- trainData %>% 
+    dplyr::select(-one_of(emptyOrNA$key)) %>%
+    dplyr::select(-ends_with('_window')) %>% 
+    dplyr::select(-contains('_timestamp')) %>%
+    dplyr::select(-one_of(c('X', 'user_name')))
+
+```
+  
+It is clear from the scatter plots of the features and the outcome variable that some of the features have distinct ranges corresponding to certain outcomes. Also, there are certain features, such as *gyros_dumbell_x*, *gyros_forearm_z* and *yaw_forearm*, that have no discernible relationship to any of the five outcome classes that we wish to predict.  
+  
+***  
+  
+### Data Preprocessing   
+  
+We will now use multiple techniques to preprocess the training data to prepare it for machine learning. We will start by centering and scaling the feature variables. We will also remove all the features that have near-zero variance as they will not add any value to the predictions. Finally, we will test if there are features that are highly correlated to each other and remove such features from the dataset.   
+  
+```{r data_preprocessing}  
+
+# Check for near-zero variance features
+
+nearZero <- caret::nearZeroVar(trainData, saveMetrics = TRUE)
+nzFeatures <- rownames(nearZero)[which(nearZero$nzv)]
+
+if(length(nzFeatures) > 0)
+    trainData <- trainData %>% dplyr::select(-one_of(nzFeatures))
+
+# Check for highly correlated (more than 80% corr) features
+
+correlationThreshold <- 0.80
+
+corrMatrix <- cor(trainData %>% dplyr::select(-one_of(outcome)))
+corrMatrix[upper.tri(corrMatrix, diag = TRUE)] <- 0
+corrFeatures <- row.names(which(abs(corrMatrix) >= correlationThreshold, arr.ind = TRUE))
+
+if(length(corrFeatures) > 0)
+    trainData <- trainData %>% dplyr::select(-one_of(corrFeatures))
+
+# Split the training data into training and validation sets
+
+inTrain <- createDataPartition((trainData %>% dplyr::select_(outcome))[[1]], 
+                               p = 0.7, list = FALSE)
+
+training <- trainData[inTrain, ]
+validation <- trainData[-inTrain, ]
+
+```
+  
+***  
+  
+### Machine Learning Models  
+  
+We will train three types of models to our training data and then compare their prediction accuracy on the validation data. We will then select the model with the highest accuracy as our final prediction model.  
+  
+```{r model_selection, results='hide', message=FALSE, cache=TRUE, cache.vars=c('modelDT', 'modelRF', 'modelGBM')}
+
+trainAndPredict <- function(trainingData, validationData, outcomeVar, trainMethod, preProcs = NULL) {
+
+    modelFormula <- paste0(outcomeVar, ' ~ .')
+    
+    controlObj <- trainControl(method = 'cv', number = 10, verboseIter = FALSE)
+    mod <- do.call('train', list(as.formula(modelFormula), method = trainMethod, 
+                                 preProcess = preProcs, trControl = controlObj, 
+                                 data = trainingData))
+    
+    pred <- predict(mod, validationData)
+    confMat <- confusionMatrix(pred, (validationData %>% select_(outcomeVar))[[1]])
+
+    return(list(Model = mod, ConfusionMatrix = confMat))
+}
+
+# Decision Tree
+modelDT  <- trainAndPredict(training, validation, outcome, trainMethod = 'rpart', 
+                             preProcs = c('center', 'scale'))
+
+# Random Forest
+modelRF <- trainAndPredict(training, validation, outcome, trainMethod = 'rf', 
+                           preProcs = c('center', 'scale'))
+
+# Boosted Tree
+modelGBM  <- trainAndPredict(training, validation, outcome, trainMethod = 'gbm', 
+                             preProcs = c('center', 'scale'))
+
+```
+  
+The detailed prediction results on the validation set from these three models can be found in the Appendix. It is clear that the **Random Forest** model has the highest accuracy (99.29%) amongst them and we will use that as our final model for prediction.
+
+Using the trained Random Forest model, here are the predictions for the 20 samples in the test set.
+
+```{r test_predictions}
+
+testData <- testData %>% dplyr::select(names(trainData)[-length(names(trainData))])
+predict(modelRF$Model, testData)
+
+```
+  
+***  
+  
+## Appendix  
+  
+### Exploratory Data Analysis  
+  
+As part of data exploration, we plotted all the features vs the outcome to get an idea of their relationship. We also plotted the density distributions of the feature variables and computed some of their basic statistics. There are no missing values in the training dataset.
+  
+```{r data_exploration_appendix, fig.width=12, fig.height=28}
+
+# Plot the change in features vs. the outcome variable 'classe'
+
+ggplot(melt(trainData, id.vars = outcome),
+       aes_string(x = 'value', y = outcome, col = 'variable')) +
+    geom_point(alpha = 0.5, size = 0.5) +
+    facet_wrap( ~ variable, ncol = 5, scales = "free_x") +
+    labs(x = NULL, y = NULL, title = 'Scatter Plots of All Features vs. Outcome') +
+    theme_minimal() + theme(legend.position = 'none',
+                            plot.title = element_text(size = 16))
+
+ggplot(melt(trainData, id.vars = outcome),
+       aes_string(x = 'value', col = 'variable', fill = 'variable')) +
+    geom_density(alpha = 0.5, size = 0.5) +
+    facet_wrap( ~ variable, ncol = 5, scales = "free") +
+    labs(x = NULL, y = NULL, title = 'Distribution Plots of All Features') +
+    theme_minimal() + theme(legend.position = 'none',
+                            plot.title = element_text(size = 16),
+                            axis.text = element_blank())
+
+# Summarize the feature statistics
+
+summaryData <- reshape2::melt(trainData, id.vars = outcome) %>% 
+    dplyr::group_by(variable) %>%
+    dplyr::summarise(NAs = sum(is.na(value)),
+              Mean = mean(value, na.rm = TRUE),
+              SD = sd(value, na.rm = TRUE),
+              Min = min(value, na.rm = TRUE),
+              Max = max(value, na.rm = TRUE),
+              Q25 = quantile(value, 0.25, na.rm = TRUE),
+              Q50 = median(value, na.rm = TRUE),
+              Q75 = quantile(value, 0.75, na.rm = TRUE)) %>%
+    dplyr::rename(Feature = variable) %>%
+    dplyr::mutate_if(is.numeric, round, digits = 3)
+
+kable(summaryData, 'html') %>%
+    kable_styling(bootstrap_options = c('striped', 'condensed'),
+                  position = 'center',
+                  font_size = 12)
+
+```  
+
+### Prediction Results  
+  
+```{r predictions_appendix}
+
+modelDT$ConfusionMatrix
+
+modelRF$ConfusionMatrix
+
+modelGBM$ConfusionMatrix
+
+```
+
+    
