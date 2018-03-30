@@ -216,7 +216,7 @@ modelRF &lt;- trainAndPredict(training, validation, outcome, trainMethod = 'rf',
 # Boosted Tree
 modelGBM  &lt;- trainAndPredict(training, validation, outcome, trainMethod = 'gbm', 
                              preProcs = c('center', 'scale'))</code></pre>
-<p>The detailed prediction results on the validation set from these three models can be found in the Appendix. It is clear that the <strong>Random Forest</strong> model has the highest accuracy (99.29%) amongst them and we will use that as our final model for prediction.</p>
+<p>The detailed prediction results on the validation set from these three models can be found in the Appendix. It is clear that the <strong>Random Forest</strong> model which has <strong>99.29%</strong> accuracy and <strong>0.71%</strong> out-of-sample error rate is the best model amongst them and we will use that as our final model for prediction.</p>
 <p>Using the trained Random Forest model, here are the predictions for the 20 samples in the test set.</p>
 <pre class="r"><code>testData &lt;- testData %&gt;% dplyr::select(names(trainData)[-length(names(trainData))])
 predict(modelRF$Model, testData)</code></pre>
